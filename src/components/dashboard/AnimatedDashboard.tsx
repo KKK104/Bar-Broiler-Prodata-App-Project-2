@@ -1,0 +1,844 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { motion, AnimatePresence } from "framer-motion"
+import { Button } from "../ui/button"
+import { Card, CardContent } from "../ui/card"
+import { 
+  User, 
+  Home, 
+  Calculator, 
+  ArrowUpDown, 
+  ArrowUp, 
+  ArrowDown,
+  Plus,
+  Settings,
+  BarChart3,
+  TrendingUp,
+  Users as UsersIcon,
+  Building as BuildingIcon,
+  Activity,
+  Target,
+  Award,
+  Sparkles
+} from "lucide-react"
+import { supabase } from "@/lib/supabase"
+import { useRouter } from 'next/navigation'
+import { NavigationHeader } from "../ui/navigation-header"
+import { BuildingAwarePerformanceDashboard } from '../BuildingAwarePerformanceDashboard'
+import PerformanceBenchmark from '../PerformanceBenchmark'
+import CostInput from '../calculator/cost-input'
+import { HarvestInputComponent } from '../harvest/harvest-input'
+import { HarvestOutputComponent } from '../harvest/harvest-output'
+import { FeedbackButton } from '../feedback/feedback-button'
+import { EmailVerificationStatus } from '../auth/EmailVerificationStatus'
+import { useEmailVerification } from '@/hooks/useEmailVerification'
+import { EmailVerificationIndicator } from '../auth/EmailVerificationIndicator'
+import { HumidityModal } from '../humidity/HumidityModal'
+
+import type { Building } from "@/hooks/useDatabase";
+import { sessionManager, type ParticipantSession } from "@/lib/session";
+
+interface AnimatedDashboardProps {
+  participants: any[]
+  buildings: Building[]
+  onAddParticipant: () => void
+  onEditParticipant?: (id: number) => void
+  onDeleteParticipant?: (id: number) => void
+  onAddBuilding: () => void
+  onEditBuilding?: (id: string) => void
+  onDeleteBuilding?: (id: string) => void
+  onViewBuilding?: (id: string) => void
+  onSignOut: () => void
+  onBackToLanding: () => void
+  userEmail?: string
+  farmId?: string
+  farmPerformance?: {
+    totalMortality: number
+    avgFCR: number | null
+    avgWeight: number | null
+  }
+  onBenchmarkChange?: (preset: string) => void
+  isWorkerView?: boolean
+  isNewUser?: boolean
+  userId?: string
+}
+
+export function AnimatedDashboard(props: AnimatedDashboardProps) {
+  const [activeTab, setActiveTab] = useState<"overview" | "participants" | "buildings" | "benchmark" | "cost-input" | "harvest-input" | "harvest-output">("overview")
+  const [copiedCode, setCopiedCode] = useState<string | null>(null)
+  const [buildingSortBy, setBuildingSortBy] = useState<"name" | "cycle" | "date" | "status">("name")
+  const [buildingSortOrder, setBuildingSortOrder] = useState<"asc" | "desc">("asc")
+  const [selectedCycle, setSelectedCycle] = useState<number | null>(null)
+  const [selectedBenchmark, setSelectedBenchmark] = useState("Ross")
+  const [showWelcome, setShowWelcome] = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [showEmailWarning, setShowEmailWarning] = useState(false)
+  const [humidityModalOpen, setHumidityModalOpen] = useState(false)
+
+  const router = useRouter()
+
+  // Welcome modal disabled for now to prevent errors
+
+  const handleSignOut = () => {
+    props.onSignOut()
+  }
+
+  const handleHumidityClick = () => {
+    console.log('handleHumidityClick called!')
+    setHumidityModalOpen(true)
+  }
+
+  const handleBenchmarkChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedBenchmark(e.target.value)
+    if (props.onBenchmarkChange) {
+      props.onBenchmarkChange(e.target.value)
+    }
+  }
+
+  const { isVerified: isEmailVerified } = useEmailVerification()
+
+  const handleAddBuilding = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    props.onAddBuilding()
+  }
+
+  const handleAddParticipant = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    props.onAddParticipant()
+  }
+
+  // Get unique cycle numbers for filtering
+  const uniqueCycles = props.buildings
+    .map(b => b.cycle_number)
+    .filter((cycle): cycle is number => cycle !== undefined && cycle !== null)
+    .filter((cycle, index, arr) => arr.indexOf(cycle) === index)
+    .sort((a, b) => a - b)
+
+  // Sort and filter buildings based on current settings
+  const sortedBuildings = props.buildings
+    .filter(b => selectedCycle === null || b.cycle_number === selectedCycle)
+    .sort((a, b) => {
+      let aValue: any
+      let bValue: any
+
+      switch (buildingSortBy) {
+        case "name":
+          aValue = a.name?.toLowerCase() || ""
+          bValue = b.name?.toLowerCase() || ""
+          break
+        case "cycle":
+          aValue = a.cycle_number || 0
+          bValue = b.cycle_number || 0
+          break
+        case "date":
+          aValue = a.cycle_start_date ? new Date(a.cycle_start_date).getTime() : 0
+          bValue = b.cycle_start_date ? new Date(b.cycle_start_date).getTime() : 0
+          break
+        case "status":
+          aValue = a.status?.toLowerCase() || ""
+          bValue = b.status?.toLowerCase() || ""
+          break
+        default:
+          return 0
+      }
+
+      if (aValue < bValue) return buildingSortOrder === "asc" ? -1 : 1
+      if (aValue > bValue) return buildingSortOrder === "asc" ? 1 : -1
+      return 0
+    })
+
+  const handleSort = (sortBy: "name" | "cycle" | "date" | "status") => {
+    if (buildingSortBy === sortBy) {
+      setBuildingSortOrder(buildingSortOrder === "asc" ? "desc" : "asc")
+    } else {
+      setBuildingSortBy(sortBy)
+      setBuildingSortOrder("asc")
+    }
+  }
+
+  const getSortIcon = (sortBy: "name" | "cycle" | "date" | "status") => {
+    if (buildingSortBy !== sortBy) return <ArrowUpDown className="w-4 h-4" />
+    return buildingSortOrder === "asc" ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />
+  }
+
+  const copyToClipboard = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopiedCode(code)
+      setTimeout(() => setCopiedCode(null), 2000)
+    } catch (err) {
+      const textArea = document.createElement('textarea')
+      textArea.value = code
+      document.body.appendChild(textArea)
+      textArea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textArea)
+      setCopiedCode(code)
+      setTimeout(() => setCopiedCode(null), 2000)
+    }
+  }
+
+  // Welcome Modal for New Users
+  const handleStartTour = () => {
+    setShowOnboarding(true)
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      {/* Welcome Modal disabled to prevent errors */}
+      <NavigationHeader
+        title="Owner Farm Dashboard"
+        subtitle={`Welcome back, ${props.userEmail}`}
+        userEmail={props.userEmail}
+        farmId={props.farmId}
+        userId={props.userId || ''}
+        onHomeClick={props.onBackToLanding}
+        onSignOut={handleSignOut}
+        onHumidityClick={handleHumidityClick}
+        className="navigation-menu"
+      />
+      
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 dashboard-overview">
+        {/* Only show buildings list in read-only mode for worker view */}
+        {props.isWorkerView ? (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="bg-white dark:bg-gray-800 rounded-lg shadow mb-6 p-4 sm:p-6"
+          >
+            <h2 className="text-lg sm:text-xl font-semibold mb-4 dark:text-white">Buildings</h2>
+            {props.buildings.length === 0 ? (
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                <Home className="mx-auto mb-4 text-gray-400" size={48} />
+                <p className="font-medium">No buildings yet</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {props.buildings.map((building, index) => (
+                  <motion.div
+                    key={building.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                    className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 sm:p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border dark:border-gray-600 space-y-2 sm:space-y-0"
+                  >
+                    <div className="flex items-center space-x-3">
+                      <Home className="text-gray-400" size={16} />
+                      <span className="font-medium dark:text-white">{building.name}</span>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        ) : (
+          <>
+            {/* Enhanced Tabs with Animations */}
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white dark:bg-gray-800 rounded-lg shadow mb-6"
+            >
+              <div className="border-b border-gray-200 dark:border-gray-700">
+                <nav className="flex flex-wrap gap-1 sm:gap-2 px-2 sm:px-4 lg:px-6 overflow-x-auto pb-2">
+                  {[
+                    { id: "overview", label: "Overview", icon: <BarChart3 className="w-4 h-4" /> },
+                    { id: "participants", label: `Staff (${props.participants.length})`, icon: <UsersIcon className="w-4 h-4" /> },
+                    { id: "buildings", label: `Buildings (${props.buildings.length})`, icon: <BuildingIcon className="w-4 h-4" /> },
+                    { id: "benchmark", label: "Benchmark", icon: <Target className="w-4 h-4" /> },
+                    { id: "cost-input", label: "Cost Input", icon: <Calculator className="w-4 h-4" /> },
+                    { id: "harvest-input", label: "Harvest Input", icon: <Activity className="w-4 h-4" /> },
+                    { id: "harvest-output", label: "Harvest Output", icon: <TrendingUp className="w-4 h-4" /> }
+                  ].map((tab) => (
+                    <motion.button
+                      key={tab.id}
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                      onClick={() => setActiveTab(tab.id as any)}
+                      className={`py-3 sm:py-4 px-2 sm:px-3 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap flex items-center space-x-1 sm:space-x-2 transition-colors ${
+                        activeTab === tab.id
+                          ? "border-blue-500 text-blue-600 dark:text-blue-400"
+                          : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+                      }`}
+                    >
+                      {tab.icon}
+                      <span className="hidden xs:inline">{tab.label}</span>
+                      <span className="xs:hidden">{tab.label.split(' ')[0]}</span>
+                    </motion.button>
+                  ))}
+                </nav>
+              </div>
+
+              <div className="p-4 sm:p-6">
+                <AnimatePresence mode="wait">
+                  {activeTab === "overview" && (
+                    <motion.div
+                      key="overview"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      className="space-y-6"
+                    >
+                      {/* Enhanced Performance Analytics Dashboard */}
+                      <BuildingAwarePerformanceDashboard farmId={props.buildings[0]?.farm_id || "default-farm-id"} />
+                      
+                      
+                      {/* Quick Stats Section with Animations */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.1 }}
+                        >
+                          <Card className="hover:shadow-lg transition-shadow add-staff-card">
+                            <CardContent className="p-6">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <h3 className="text-lg font-semibold dark:text-white">Staff Members</h3>
+                                  <div className="text-3xl font-bold text-blue-600 dark:text-blue-400 mt-2">
+                                    {props.participants.length}
+                                  </div>
+                                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Active staff accounts</p>
+                                </div>
+                                <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/20 rounded-full flex items-center justify-center">
+                                  <UsersIcon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                                </div>
+                              </div>
+                              <Button 
+                                className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white" 
+                                onClick={handleAddParticipant}
+                              >
+                                <Plus className="w-4 h-4 mr-2" />
+                                Add Staff
+                              </Button>
+                            </CardContent>
+                          </Card>
+                        </motion.div>
+
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.2 }}
+                        >
+                          <Card className="hover:shadow-lg transition-shadow add-building-card">
+                            <CardContent className="p-6">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <h3 className="text-lg font-semibold dark:text-white">Buildings</h3>
+                                  <div className="text-3xl font-bold text-green-600 dark:text-green-400 mt-2">
+                                    {props.buildings?.length || 0}
+                                  </div>
+                                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Farm buildings</p>
+                                </div>
+                                <div className="w-12 h-12 bg-green-100 dark:bg-green-900/20 rounded-full flex items-center justify-center">
+                                  <BuildingIcon className="w-6 h-6 text-green-600 dark:text-green-400" />
+                                </div>
+                              </div>
+                              <Button 
+                                type="button"
+                                className="mt-4 w-full bg-green-600 hover:bg-green-700 text-white" 
+                                onClick={handleAddBuilding}
+                              >
+                                <Plus className="w-4 h-4 mr-2" />
+                                Add Building
+                              </Button>
+                            </CardContent>
+                          </Card>
+                        </motion.div>
+                      </div>
+
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.3 }}
+                      >
+                        <PerformanceBenchmark />
+                      </motion.div>
+                    </motion.div>
+                  )}
+
+                  {activeTab === "participants" && (
+                    <motion.div
+                      key="participants"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      className="space-y-4"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-4 sm:space-y-0">
+                        <div>
+                          <h2 className="text-xl font-semibold dark:text-white">Staff Access Codes</h2>
+                          <p className="text-sm text-gray-500 dark:text-gray-400">Share these codes with your staff for login</p>
+                        </div>
+                        <Button type="button" onClick={handleAddParticipant} className="w-full sm:w-auto">
+                          <Plus className="w-4 h-4 mr-2" />
+                          Add Staff
+                        </Button>
+                      </div>
+
+                      {props.participants.length === 0 ? (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          className="text-center py-8 text-gray-500 dark:text-gray-400"
+                        >
+                          <UsersIcon className="w-12 h-12 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
+                          <p className="font-medium">No staff members added yet</p>
+                          <p className="text-sm">Add staff members to generate access codes</p>
+                        </motion.div>
+                      ) : (
+                        <div className="space-y-3">
+                          {props.participants.map((participant, index) => (
+                            <motion.div
+                              key={participant.id}
+                              initial={{ opacity: 0, x: -20 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: index * 0.1 }}
+                              className="flex flex-col sm:flex-row sm:items-center p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors space-y-3 sm:space-y-0"
+                            >
+                              <div className="flex items-center space-x-3 flex-1 min-w-0">
+                                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/20 rounded-full flex items-center justify-center flex-shrink-0">
+                                  <User className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <h3 className="font-medium text-gray-900 dark:text-white truncate">{participant.name}</h3>
+                                  <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                                    Access: {participant.access_tools?.join(', ') || 'Standard access'}
+                                  </p>
+                                </div>
+                              </div>
+                              
+                              <div className="flex flex-col sm:flex-row sm:items-center space-y-3 sm:space-y-0 sm:space-x-3">
+                                <div className="text-center sm:text-right">
+                                  <p className="text-xs text-gray-500 uppercase tracking-wide">Access Code</p>
+                                  <p className="text-lg font-mono font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2 py-1 rounded inline-block">
+                                    {participant.code}
+                                  </p>
+                                </div>
+                                
+                                <div className="flex items-center justify-center sm:justify-start space-x-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => copyToClipboard(participant.code)}
+                                    className={`transition-all duration-200 ${
+                                      copiedCode === participant.code 
+                                        ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-600 dark:text-green-400' 
+                                        : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                                    }`}
+                                    title="Copy access code"
+                                  >
+                                    {copiedCode === participant.code ? (
+                                      <>
+                                        <Award className="w-4 h-4 sm:mr-1" />
+                                        <span className="hidden sm:inline">Copied!</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Settings className="w-4 h-4 sm:mr-1" />
+                                        <span className="hidden sm:inline">Copy</span>
+                                      </>
+                                    )}
+                                  </Button>
+                                  
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => props.onEditParticipant?.(participant.id)}
+                                    className="text-blue-600 hover:text-blue-700"
+                                  >
+                                    <span className="sm:hidden">Edit</span>
+                                    <span className="hidden sm:inline">Edit</span>
+                                  </Button>
+                                  
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => props.onDeleteParticipant?.(participant.id)}
+                                    className="text-red-600 hover:text-red-700"
+                                  >
+                                    <span className="sm:hidden">Del</span>
+                                    <span className="hidden sm:inline">Delete</span>
+                                  </Button>
+                                </div>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+
+                  {activeTab === "buildings" && (
+                    <motion.div
+                      key="buildings"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      className="space-y-4"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center space-y-4 sm:space-y-0">
+                        <h2 className="text-xl font-semibold dark:text-white">Buildings</h2>
+                        <Button type="button" onClick={handleAddBuilding} className="w-full sm:w-auto">
+                          <Plus className="w-4 h-4 mr-2" />
+                          Add Building
+                        </Button>
+                      </div>
+
+                      {/* Cycle Filter */}
+                      {props.buildings.length > 0 && uniqueCycles.length > 0 && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 space-y-2 sm:space-y-0">
+                            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Filter by Cycle:</h3>
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {selectedCycle !== null ? `Showing Cycle #${selectedCycle}` : "Showing All Cycles"}
+                              {" "}({sortedBuildings.length} buildings)
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant={selectedCycle === null ? "default" : "outline"}
+                              size="sm"
+                              onClick={() => setSelectedCycle(null)}
+                              className={selectedCycle === null ? "bg-blue-600 text-white hover:bg-blue-700" : ""}
+                            >
+                              All Cycles
+                            </Button>
+                            {uniqueCycles.map((cycle) => (
+                              <Button
+                                key={cycle}
+                                variant={selectedCycle === cycle ? "default" : "outline"}
+                                size="sm"
+                                onClick={() => setSelectedCycle(cycle)}
+                                className={selectedCycle === cycle ? "bg-blue-600 text-white hover:bg-blue-700" : ""}
+                              >
+                                Cycle #{cycle}
+                              </Button>
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {/* Sorting Controls */}
+                      {props.buildings.length > 0 && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="bg-gray-50 dark:bg-gray-700 p-4 rounded-lg"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 space-y-2 sm:space-y-0">
+                            <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Sort by:</h3>
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {buildingSortBy === "name" && "Building Name"}
+                              {buildingSortBy === "cycle" && "Cycle Number"}
+                              {buildingSortBy === "date" && "Start Date"}
+                              {buildingSortBy === "status" && "Status"}
+                              {" "}({buildingSortOrder === "asc" ? "A-Z" : "Z-A"})
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {[
+                              { key: "name", label: "Name" },
+                              { key: "cycle", label: "Cycle" },
+                              { key: "date", label: "Start Date" },
+                              { key: "status", label: "Status" }
+                            ].map((sortOption) => (
+                              <Button
+                                key={sortOption.key}
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleSort(sortOption.key as any)}
+                                className={`flex items-center space-x-1 ${
+                                  buildingSortBy === sortOption.key ? "bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300" : ""
+                                }`}
+                              >
+                                {getSortIcon(sortOption.key as any)}
+                                <span>{sortOption.label}</span>
+                              </Button>
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {props.buildings.length === 0 ? (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          className="text-center py-8 text-gray-500 dark:text-gray-400"
+                        >
+                          <BuildingIcon className="w-12 h-12 mx-auto mb-2 text-gray-300 dark:text-gray-600" />
+                          <p className="font-medium">No buildings added yet</p>
+                          <p className="text-sm">Add buildings to organize your farm</p>
+                        </motion.div>
+                      ) : (
+                        <div className="space-y-2">
+                          {sortedBuildings.map((building, index) => (
+                            <motion.div
+                              key={building.id}
+                              initial={{ opacity: 0, x: -20 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: index * 0.1 }}
+                              className="p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                            >
+                              <div className="flex flex-col sm:flex-row sm:items-center space-y-3 sm:space-y-0">
+                                <div className="flex items-start space-x-3 flex-1 min-w-0">
+                                  {/* Cycle Badge */}
+                                  {building.cycle_number && (
+                                    <div className="flex-shrink-0">
+                                      <div className="w-12 h-12 bg-blue-100 dark:bg-blue-900/20 rounded-full flex items-center justify-center border-2 border-blue-200 dark:border-blue-800">
+                                        <span className="text-sm font-bold text-blue-700 dark:text-blue-300">
+                                          #{building.cycle_number}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  )}
+                                  
+                                  <div className="min-w-0 flex-1">
+                                    <h3 className="font-medium truncate dark:text-white">{building.name}</h3>
+                                    <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                                      <p>
+                                        Status:{" "}
+                                        <span
+                                          className={`${
+                                            building.status === "active"
+                                              ? "text-green-600 dark:text-green-400"
+                                              : "text-yellow-600 dark:text-yellow-400"
+                                          }`}
+                                        >
+                                          {building.status || 'Active'}
+                                        </span>
+                                      </p>
+                                      {building.cycle_start_date && (
+                                        <p className="truncate">
+                                          Start Date: <span className="font-medium text-blue-600 dark:text-blue-400">
+                                            {new Date(building.cycle_start_date).toLocaleDateString()}
+                                          </span>
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                <div className="flex items-center justify-center sm:justify-start space-x-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => props.onViewBuilding?.(building.id)}
+                                    className="text-gray-700 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100"
+                                  >
+                                    <span className="sm:hidden">View</span>
+                                    <span className="hidden sm:inline">View</span>
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => props.onEditBuilding?.(building.id)}
+                                    className="text-blue-600 hover:text-blue-700"
+                                  >
+                                    <span className="sm:hidden">Edit</span>
+                                    <span className="hidden sm:inline">Edit</span>
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => props.onDeleteBuilding?.(building.id)}
+                                    className="text-red-600 hover:text-red-700"
+                                  >
+                                    <span className="sm:hidden">Del</span>
+                                    <span className="hidden sm:inline">Delete</span>
+                                  </Button>
+                                </div>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+
+                  {activeTab === "benchmark" && (
+                    <motion.div
+                      key="benchmark"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    >
+                      <PerformanceBenchmark />
+                    </motion.div>
+                  )}
+
+                  {activeTab === "cost-input" && (
+                    <motion.div
+                      key="cost-input"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    >
+                      <CostInput />
+                    </motion.div>
+                  )}
+
+                  {activeTab === "harvest-input" && (
+                    <motion.div
+                      key="harvest-input"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      className="space-y-6"
+                    >
+                      <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Harvest Input Management</h2>
+                      <p className="text-gray-600 dark:text-gray-400">Select a building to add harvest input records.</p>
+                      
+                      {props.buildings && props.buildings.length > 0 ? (
+                        <div className="grid gap-4">
+                          {props.buildings.map((building) => (
+                            <div key={building.id} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                              <div className="flex justify-between items-center mb-4">
+                                <div>
+                                  <h3 className="text-lg font-semibold dark:text-white">{building.name}</h3>
+                                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    Cycle #{building.cycle_number || 1} | Status: {building.status || 'Active'}
+                                  </p>
+                                </div>
+                              </div>
+                              <HarvestInputComponent
+                                buildingId={building.id}
+                                farmId={building.farm_id || ''}
+                                cycleNumber={building.cycle_number || 1}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <p className="text-gray-600 dark:text-gray-400">No buildings available. Please add buildings first.</p>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+
+                  {activeTab === "harvest-output" && (
+                    <motion.div
+                      key="harvest-output"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                      className="space-y-6"
+                    >
+                      <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Harvest Output & Performance</h2>
+                      <p className="text-gray-600 dark:text-gray-400">View harvest performance and financial analysis for each building.</p>
+                      
+                      {props.buildings && props.buildings.length > 0 ? (
+                        <div className="grid gap-6">
+                          {props.buildings.map((building) => (
+                            <div key={building.id} className="border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+                              <div className="mb-4">
+                                <h3 className="text-xl font-semibold dark:text-white">{building.name}</h3>
+                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                  Cycle #{building.cycle_number || 1} | Status: {building.status || 'Active'}
+                                </p>
+                              </div>
+                              <HarvestOutputComponent
+                                buildingId={building.id}
+                                farmId={building.farm_id || ''}
+                                cycleNumber={building.cycle_number || 1}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8">
+                          <p className="text-gray-600 dark:text-gray-400">No buildings available. Please add buildings first.</p>
+                        </div>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </motion.div>
+          </>
+        )}
+      </div>
+
+      {/* Email Verification Warning Modal */}
+      <AnimatePresence>
+        {showEmailWarning && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-lg p-6 max-w-md w-full"
+            >
+              <div className="text-center">
+                <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-8 h-8 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                  Email Verification Required
+                </h3>
+                
+                <p className="text-gray-600 mb-4">
+                  You need to verify your email address before you can add buildings and staff members.
+                </p>
+                
+                                 <div className="space-y-4">
+                   {/* Email Verification Status */}
+                   <div className="bg-gray-50 rounded-lg p-3">
+                     <EmailVerificationStatus 
+                       showActions={true}
+                       compact={true}
+                     />
+                   </div>
+                   
+                   <div className="space-y-2">
+                     <Button
+                       onClick={() => setShowEmailWarning(false)}
+                       variant="outline"
+                       className="w-full"
+                     >
+                       Close
+                     </Button>
+                   </div>
+                 </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Feedback Button */}
+      <FeedbackButton />
+
+      {/* Humidity Modal */}
+      <HumidityModal
+        isOpen={humidityModalOpen}
+        onClose={() => setHumidityModalOpen(false)}
+        userId={props.userId || ''}
+        farmId={props.buildings[0]?.farm_id || ''}
+      />
+    </div>
+  )
+}

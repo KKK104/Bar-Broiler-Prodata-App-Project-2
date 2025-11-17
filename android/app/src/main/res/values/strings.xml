@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PRODATA BROILER APP</string>
+    <string name="title_activity_main">PRODATA BROILER APP</string>
+    <string name="package_name">com.prodata.farmapp</string>
+    <string name="custom_url_scheme">com.prodata.farmapp</string>
+</resources>

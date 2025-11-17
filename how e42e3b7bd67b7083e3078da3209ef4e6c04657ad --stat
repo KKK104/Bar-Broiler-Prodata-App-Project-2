@@ -1,0 +1,94 @@
+[33mcommit e42e3b7bd67b7083e3078da3209ef4e6c04657ad[m
+Author: KKK104 <leonacinintal@gmail.com>
+Date:   Fri Aug 15 15:43:15 2025 +0800
+
+    Update AnimatedLandingPage.tsx
+
+[1mdiff --git a/src/components/landing/AnimatedLandingPage.tsx b/src/components/landing/AnimatedLandingPage.tsx[m
+[1mindex bcab21a..a1e979f 100644[m
+[1m--- a/src/components/landing/AnimatedLandingPage.tsx[m
+[1m+++ b/src/components/landing/AnimatedLandingPage.tsx[m
+[36m@@ -86,11 +86,11 @@[m [mexport function AnimatedLandingPage({[m
+   ][m
+ [m
+   const stats = [[m
+[31m-    { label: "Active Farms", value: "500+", icon: <Home className="w-5 h-5" /> },[m
+[31m-    { label: "Staff Members", value: "2000+", icon: <Users className="w-5 h-5" /> },[m
+[31m-    { label: "Buildings Tracked", value: "1500+", icon: <Building className="w-5 h-5" /> },[m
+[31m-    { label: "Data Points", value: "1M+", icon: <BarChart3 className="w-5 h-5" /> }[m
+[31m-  ][m
+[32m+[m[32m    { label: "Active Farms", value: "✴", icon: <Home className="w-5 h-5" /> },[m
+[32m+[m[32m    { label: "Staff Members", value: "✴", icon: <Users className="w-5 h-5" /> },[m
+[32m+[m[32m    { label: "Buildings Tracked", value: "✴", icon: <Building className="w-5 h-5" /> },[m
+[32m+[m[32m    { label: "Data Points", value: "✴", icon: <BarChart3 className="w-5 h-5" /> }[m
+[32m+[m[32m  ][m[41m [m
+ [m
+   return ([m
+     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">[m
+[36m@@ -157,8 +157,8 @@[m [mexport function AnimatedLandingPage({[m
+                 transition={{ delay: 0.4 }}[m
+                 className="text-xl text-gray-600 dark:text-gray-300 max-w-3xl mx-auto"[m
+               >[m
+[31m-                Streamline your broiler farm operations with advanced analytics, [m
+[31m-                real-time tracking, and intelligent insights to maximize productivity.[m
+[32m+[m[32m                note note note note,[m
+[32m+[m[32m                note.[m
+               </motion.p>[m
+             </motion.div>[m
+ [m
+[36m@@ -176,7 +176,7 @@[m [mexport function AnimatedLandingPage({[m
+                     className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-4 text-lg font-semibold rounded-xl shadow-lg transform hover:scale-105 transition-all duration-200"[m
+                   >[m
+                     <Sparkles className="w-5 h-5 mr-2" />[m
+[31m-                    Start Free Trial[m
+[32m+[m[32m                    Start For Free[m[41m [m
+                   </Button>[m
+                   [m
+                   <Button[m
+[36m@@ -340,19 +340,19 @@[m [mexport function AnimatedLandingPage({[m
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">[m
+             {[[m
+               {[m
+[31m-                name: "Sarah Johnson",[m
+[32m+[m[32m                name: "?",[m
+                 role: "Farm Owner",[m
+                 content: "This platform has revolutionized how we manage our farm. The analytics are incredible!",[m
+                 rating: 5[m
+               },[m
+               {[m
+[31m-                name: "Michael Chen",[m
+[32m+[m[32m                name: "?",[m
+                 role: "Operations Manager",[m
+                 content: "The staff management features make it so easy to coordinate our team. Highly recommended!",[m
+                 rating: 5[m
+               },[m
+               {[m
+[31m-                name: "David Rodriguez",[m
+[32m+[m[32m                name: "?",[m
+                 role: "Farm Director",[m
+                 content: "The cost tracking and performance insights have helped us increase efficiency by 30%.",[m
+                 rating: 5[m
+[36m@@ -405,7 +405,7 @@[m [mexport function AnimatedLandingPage({[m
+               Ready to Transform Your Farm?[m
+             </h2>[m
+             <p className="text-xl text-blue-100 mb-8">[m
+[31m-              Join thousands of farm owners who are already using our platform to improve their operations.[m
+[32m+[m[32m              note note note note.[m
+             </p>[m
+             [m
+             {!user ? ([m
+[36m@@ -459,11 +459,11 @@[m [mexport function AnimatedLandingPage({[m
+               Professional farm management system for modern agriculture[m
+             </p>[m
+             <div className="mt-6 flex items-center justify-center space-x-6 text-sm text-gray-400">[m
+[31m-              <span>© 2024 Broiler Pro Data. All rights reserved.</span>[m
+[32m+[m[32m              <span>© 2025 Broiler Pro Data. All rights reserved.</span>[m
+               <span>•</span>[m
+[31m-              <span>Privacy Policy</span>[m
+[32m+[m[32m              <span>Privacy Policy Working </span>[m
+               <span>•</span>[m
+[31m-              <span>Terms of Service</span>[m
+[32m+[m[32m              <span>Terms of Service working</span>[m
+             </div>[m
+           </div>[m
+         </div>[m

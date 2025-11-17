@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/humidity/cron",
+      "schedule": "*/15 * * * *"
+    }
+  ]
+}

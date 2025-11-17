@@ -1,0 +1,11 @@
+{
+  "name": "PRODATA BROILER APP",
+  "short_name": "FarmApp",
+  "description": "Professional farm management system for broiler operations",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3B82F6",
+  "orientation": "portrait",
+  "categories": ["productivity", "business"]
+} 

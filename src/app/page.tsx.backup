@@ -1,0 +1,1782 @@
+"use client"
+
+import { useState, useEffect, useCallback } from "react"
+import { Button } from "../components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { SignUpForm } from "@/components/auth/signup-form"
+import { SignInForm } from "@/components/auth/signin-form"
+import { EmailVerification } from "@/components/auth/email-verification"
+import { AddParticipantView } from "../components/add-participant-view"
+import { AddBuildingView } from "../components/add-building-view"
+import { Dashboard } from "../components/dashboard"
+import { AnimatedDashboard } from "../components/dashboard/AnimatedDashboard"
+import { ParticipantLogin } from "../components/participant-login"
+import { RoleDashboard } from "../components/role-dashboard"
+import { SimpleRegistration } from "../components/onboarding/SimpleRegistration"
+import { ProductTour } from "../components/tour/ProductTour"
+import { VerificationBanner } from "../components/auth/VerificationBanner"
+import { AnimatedLandingPage } from "../components/landing/AnimatedLandingPage"
+import { useParticipants, useBuildings } from "@/hooks/useDatabase"
+import { useAuth } from "@/hooks/useAuth"
+import { supabase } from "@/lib/supabase"
+import { checkUserVerificationStatus } from "@/lib/supabase"
+import { useRouter } from 'next/navigation';
+import { BroilerCalculator } from "../components/calculator/broiler-calculator"
+import type { Building } from "@/hooks/useDatabase";
+import { sessionManager, type ParticipantSession } from "@/lib/session";
+import { SessionTimeoutWarning } from "@/components/session-timeout-warning";
+import { WorkerProductionDashboard } from "../components/WorkerDashboard/WorkerProductionDashboard";
+import { useIsMobile } from "@/hooks/calculator/use-mobile";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { FeedbackButton } from "@/components/feedback/feedback-button";
+import { CACHE_BUSTER } from "@/lib/cache-buster";
+import { CacheClearButton } from "@/components/CacheClearButton";
+
+type ViewType = 
+  | "landing" 
+  | "signin" 
+  | "signup" 
+  | "email-verification"
+  | "dashboard"
+  | "participant-login"
+  | "participant-dashboard"
+  | "add-participant" 
+  | "add-building"
+  | "congratulations"
+
+const authenticateParticipant = async (code: string) => {
+  try {
+    const { data, error } = await supabase
+      .from('participants')
+      .select('*')
+      .eq('code', code)
+      .single()
+
+    if (error || !data) {
+      return null
+    }
+
+    return data
+  } catch (error) {
+    console.error('Authentication error:', error)
+    return null
+  }
+}
+
+export default function HomePage() {
+  // Register service worker for PWA and initialize cache buster
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then((registration) => {
+          console.log('SW registered: ', registration);
+        })
+        .catch((registrationError) => {
+          console.log('SW registration failed: ', registrationError);
+        });
+    }
+    
+    // Initialize cache buster
+    CACHE_BUSTER.checkForUpdates();
+    console.log('Cache buster initialized with version:', CACHE_BUSTER.version);
+  }, []);
+
+  const isMobile = useIsMobile();
+  const [isClient, setIsClient] = useState(false)
+  const [currentView, setCurrentView] = useState<ViewType>("landing")
+  const [editingParticipant, setEditingParticipant] = useState<any | null>(null)
+  const [editingBuilding, setEditingBuilding] = useState<any | null>(null)
+  const [isNewAccount, setIsNewAccount] = useState(true)
+  const [isNewUser, setIsNewUser] = useState(false)
+  const [isTrulyNewUser, setIsTrulyNewUser] = useState(false) // Track truly new users
+  const [isFromSignIn, setIsFromSignIn] = useState(false)
+  const [isManualNavigation, setIsManualNavigation] = useState(false)
+  const [userManuallyNavigatedToLanding, setUserManuallyNavigatedToLanding] = useState(false)
+  const [newParticipantName, setNewParticipantName] = useState("")
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [signOutMessage, setSignOutMessage] = useState("")
+  const [currentParticipant, setCurrentParticipant] = useState<ParticipantSession | null>(null)
+  const [viewingBuilding, setViewingBuilding] = useState<Building | null>(null);
+  const [buildings, setBuildings] = useState<Building[]>([]);
+  const [buildingsWithPerformance, setBuildingsWithPerformance] = useState<any[]>([]);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedBuilding, setSelectedBuilding] = useState(null);
+  const [farmId, setFarmId] = useState<string>("");
+
+  // Handler to open calculator modal for a building
+  const handleInputBuilding = (building: Building) => {
+    setViewingBuilding(building);
+    console.log("setViewingBuilding called with:", building);
+  };
+
+  // Function to determine if user is truly new
+  const isUserTrulyNew = async (user: any) => {
+    if (!user) return false;
+    
+    // Check if user was created recently (within last 24 hours)
+    const userCreatedAt = new Date(user.created_at);
+    const now = new Date();
+    const hoursSinceCreation = (now.getTime() - userCreatedAt.getTime()) / (1000 * 60 * 60);
+    
+    // User is truly new if:
+    // 1. Account was created within last 24 hours
+    // 2. Email was just verified (email_confirmed_at is recent)
+    const isRecentlyCreated = hoursSinceCreation <= 24;
+    const isRecentlyVerified = user.email_confirmed_at && 
+      (now.getTime() - new Date(user.email_confirmed_at).getTime()) / (1000 * 60 * 60) <= 24;
+    
+    // Also check database verification status
+    let isVerifiedInDatabase = false;
+    try {
+      if (user?.id) {
+        const result = await checkUserVerificationStatus(user.id);
+        if (result.success && result.data) {
+          isVerifiedInDatabase = result.data.is_verified;
+          console.log('Database verification status:', result.data);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking database verification status:', error);
+    }
+    
+    console.log('User newness check:', {
+      userEmail: user.email,
+      createdAt: user.created_at,
+      emailConfirmedAt: user.email_confirmed_at,
+      hoursSinceCreation,
+      isRecentlyCreated,
+      isRecentlyVerified,
+      isVerifiedInDatabase,
+      isTrulyNew: isRecentlyCreated && isRecentlyVerified && isVerifiedInDatabase
+    });
+    
+    return isRecentlyCreated && isRecentlyVerified && isVerifiedInDatabase;
+  };
+
+  // Set client flag to prevent SSR issues
+  useEffect(() => {
+    setIsClient(true)
+  }, [])
+
+  const { user, loading: authLoading, authError, signOut } = useAuth();
+  console.log('currentParticipant:', currentParticipant);
+  
+  // Check for email verification redirect  
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      // Check URL hash first (Supabase auth redirect)
+      const hashParams = new URLSearchParams(window.location.hash.substring(1))
+      const searchParams = new URLSearchParams(window.location.search)
+      
+      const accessToken = hashParams.get('access_token')
+      const type = hashParams.get('type') || searchParams.get('type')
+      const verified = searchParams.get('verified')
+      
+      // If user just verified their email via link
+      if ((accessToken && type === 'signup') || (verified === 'true' && type === 'signup')) {
+        console.log('User verified email via link - checking if truly new user')
+        isUserTrulyNew(user).then(trulyNew => {
+          setIsTrulyNewUser(trulyNew);
+          setIsNewUser(trulyNew); // Only show tour for truly new users
+          setCurrentView("dashboard")
+        });
+        
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname)
+      }
+      
+      // If user is signed in and on landing page, redirect to dashboard
+      if (user && currentView === "landing") {
+        console.log('Signed in user on landing page - redirecting to dashboard')
+        setCurrentView("dashboard")
+      }
+    }
+  }, [user, currentView])
+  
+  // Fetch farm ID for authenticated user
+  useEffect(() => {
+    const fetchFarmId = async () => {
+      if (user?.id) {
+        try {
+          console.log('🔍 Fetching farm for user ID:', user.id);
+          const { data: farmData, error } = await supabase
+            .from('farms')
+            .select('id')
+            .eq('owner_id', user.id)
+            .single()
+          
+          if (farmData) {
+            setFarmId(farmData.id)
+            console.log('✅ Found existing farm ID:', farmData.id)
+          } else {
+            console.log('❌ No farm found for user:', user.id)
+            console.log('🏗️ Creating new farm for user...')
+            
+            // Create a farm for this user if none exists
+            const { data: newFarmData, error: createError } = await supabase
+              .from('farms')
+              .insert([{
+                name: 'My Farm',
+                owner_id: user.id,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              }])
+              .select()
+              .single()
+            
+            if (createError) {
+              console.error('❌ Error creating farm:', createError)
+              // Try to get any existing farm for this user as fallback
+              const { data: existingFarm } = await supabase
+                .from('farms')
+                .select('id')
+                .eq('owner_id', user.id)
+                .maybeSingle()
+              
+              if (existingFarm) {
+                setFarmId(existingFarm.id)
+                console.log('✅ Using existing farm as fallback:', existingFarm.id)
+              } else {
+                console.error('❌ No farm could be created or found for user:', user.id)
+                setFarmId("")
+              }
+            } else if (newFarmData) {
+              setFarmId(newFarmData.id)
+              console.log('✅ Successfully created new farm ID:', newFarmData.id)
+            }
+          }
+        } catch (error) {
+          console.error('❌ Error in farm ID fetch process:', error)
+          setFarmId("")
+        }
+      } else if (currentParticipant && (currentParticipant as any).farm_id) {
+        // For participant sessions, use the farm_id from the session
+        setFarmId((currentParticipant as any).farm_id)
+        console.log('Using farm ID from participant session:', (currentParticipant as any).farm_id)
+      } else {
+        console.log('No user or participant found, setting farmId to empty')
+        setFarmId("")
+      }
+    }
+
+    fetchFarmId()
+  }, [user, currentParticipant])
+
+  console.log('Using farmId:', farmId);
+  
+  // Validate farm ID whenever it changes
+  useEffect(() => {
+    const validateFarmId = async () => {
+      if (farmId && farmId.trim() !== '') {
+        try {
+          console.log('🔍 Validating farm ID:', farmId);
+          const { data: farmExists, error } = await supabase
+            .from('farms')
+            .select('id')
+            .eq('id', farmId)
+            .single()
+
+          if (error || !farmExists) {
+            console.error('❌ Invalid farm ID detected:', farmId);
+            console.log('🔄 Resetting farm ID and triggering re-fetch...');
+            setFarmId(""); // Reset to trigger re-fetch
+          } else {
+            console.log('✅ Farm ID validated successfully:', farmId);
+          }
+        } catch (error) {
+          console.error('❌ Error validating farm ID:', error);
+          setFarmId(""); // Reset to trigger re-fetch
+        }
+      }
+    };
+
+    validateFarmId();
+  }, [farmId]);
+
+  const { 
+    participants, 
+    loading: participantsLoading, 
+    addParticipant, 
+    updateParticipant, 
+    deleteParticipant 
+  } = useParticipants(farmId);
+
+  const { 
+    buildings: fetchedBuildings, 
+    loading: buildingsLoading, 
+    addBuilding, 
+    updateBuilding, 
+    deleteBuilding 
+  } = useBuildings(farmId)
+
+  useEffect(() => {
+    console.log('Fetched buildings from DB:', fetchedBuildings);
+  }, [fetchedBuildings]);
+
+  // Update new account status
+  useEffect(() => {
+    setIsNewAccount(participants.length === 0 && fetchedBuildings.length === 0)
+  }, [participants, fetchedBuildings])
+
+  // Handle authentication state changes
+  useEffect(() => {
+    console.log('Auth state check:', { user: user?.email, authLoading, currentView, isManualNavigation })
+    
+    // Don't interfere with manual navigation
+    if (isManualNavigation) {
+      console.log('Manual navigation in progress - skipping auth redirects')
+      return
+    }
+    
+    if (!authLoading) {
+      if (!user) {
+        // Allow participant login and dashboard even without admin user
+        const allowedViews = ["landing", "signin", "signup", "email-verification", "participant-login", "participant-dashboard"]
+        
+        if (!allowedViews.includes(currentView)) {
+          console.log('Redirecting to landing - current view:', currentView)
+          setCurrentView("landing")
+        }
+      } else {
+        // User is authenticated
+        console.log('User is authenticated:', user.email)
+        
+        // If user manually navigated to landing, respect that choice
+        if (userManuallyNavigatedToLanding && currentView === "landing") {
+          console.log('User manually navigated to landing - respecting their choice')
+          return
+        }
+        
+        // Check if user is verified
+        const isEmailVerified = !!user.email_confirmed_at
+        
+        if (isEmailVerified) {
+          // Email is verified - check if this is a new user or existing user
+          console.log('Email verified - checking if new or existing user...')
+          
+          // Quick check for data - reduced timeout for faster response
+          let attempts = 0
+          const maxAttempts = 10 // Reduced from 30
+          
+          const checkData = async () => {
+            console.log(`Data loading attempt ${attempts + 1}/${maxAttempts}`)
+            console.log('Current data state:', { 
+              participantsCount: participants.length, 
+              buildingsCount: fetchedBuildings.length,
+              participantsLoading,
+              buildingsLoading,
+              farmId
+            })
+            
+            // If data is still loading, wait a bit more
+            if (participantsLoading || buildingsLoading) {
+              console.log('Data still loading, waiting...')
+              attempts++
+              if (attempts < maxAttempts) {
+                setTimeout(() => checkData(), 200) // Reduced from 500ms
+              } else {
+                // Timeout - assume new user, go to dashboard with tutorial
+                console.log('Data loading timeout - checking if truly new user')
+                isUserTrulyNew(user).then(trulyNew => {
+                  setIsTrulyNewUser(trulyNew);
+                  setIsNewUser(trulyNew); // Only show tour for truly new users
+                  setCurrentView("dashboard")
+                });
+              }
+              return
+            }
+            
+            // Check if we have a valid farmId
+            if (!farmId) {
+              console.log('No farmId yet, waiting...')
+              attempts++
+              if (attempts < maxAttempts) {
+                setTimeout(() => checkData(), 200) // Reduced from 500ms
+              } else {
+                // Timeout - assume new user, go to dashboard with tutorial
+                console.log('Data loading timeout - checking if truly new user')
+                isUserTrulyNew(user).then(trulyNew => {
+                  setIsTrulyNewUser(trulyNew);
+                  setIsNewUser(trulyNew); // Only show tour for truly new users
+                  setCurrentView("dashboard")
+                });
+              }
+              return
+            }
+            
+            // Data has finished loading, check the results
+            const hasData = participants.length > 0 || fetchedBuildings.length > 0
+            console.log('Final data check results:', { 
+              participantsCount: participants.length, 
+              buildingsCount: fetchedBuildings.length,
+              farmId,
+              hasData 
+            })
+            
+            if (hasData) {
+              // Verified and has data - go to dashboard
+              console.log('Email verified and has data - going to dashboard')
+              setIsNewUser(false)
+              setIsTrulyNewUser(false)
+              setCurrentView("dashboard")
+            } else {
+              // Verified but no data - check if truly new user
+              isUserTrulyNew(user).then(trulyNew => {
+                console.log('Email verified but no data - checking if truly new user:', trulyNew)
+                setIsTrulyNewUser(trulyNew);
+                setIsNewUser(trulyNew); // Only show tour for truly new users
+                setCurrentView("dashboard")
+              });
+            }
+          }
+          
+          // Start checking data
+          checkData()
+        } else {
+          // Email is not verified - show email verification page but allow access
+          console.log('Email not verified - showing email verification page')
+          setCurrentView("email-verification")
+        }
+      }
+    }
+  }, [user, authLoading, currentView, participants, fetchedBuildings, participantsLoading, buildingsLoading, farmId, isManualNavigation, userManuallyNavigatedToLanding])
+
+  // Effect to restore participant session from localStorage on app load
+  // Only restore if user is not authenticated as admin
+  useEffect(() => {
+    if (!user && !authLoading && typeof window !== 'undefined') {
+      const session = sessionManager.getSession();
+      if (session) {
+        setCurrentParticipant(session);
+        setCurrentView('participant-dashboard');
+      }
+    }
+  }, [user, authLoading]);
+
+  // Handle email verification redirect
+  useEffect(() => {
+    if (typeof window !== 'undefined' && user) {
+      // Check for force dashboard parameter
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('forceDashboard') === 'true') {
+        console.log('Force dashboard parameter detected')
+        setIsNewUser(false)
+        setCurrentView("dashboard")
+        // Clean up URL
+        window.history.replaceState(null, '', window.location.pathname);
+        return
+      }
+      
+      // Check if user came back from email verification
+      const hashParams = new URLSearchParams(window.location.hash.substring(1));
+      
+      // Check for access_token in hash (Supabase email verification)
+      const accessToken = hashParams.get('access_token');
+      const type = hashParams.get('type');
+      
+      if (accessToken && type === 'signup') {
+        console.log('Email verification detected, checking if new user')
+        // Clear the hash to clean up the URL
+        window.history.replaceState(null, '', window.location.pathname);
+        
+        // Check if this is a new user who should go to dashboard with tutorial
+        const isNewUserAccount = participants.length === 0 && fetchedBuildings.length === 0
+        if (isNewUserAccount) {
+          console.log('New user after email verification, checking if truly new user')
+          isUserTrulyNew(user).then(trulyNew => {
+            setIsTrulyNewUser(trulyNew);
+            setIsNewUser(trulyNew); // Only show tour for truly new users
+            setCurrentView("dashboard")
+          });
+        }
+      }
+    }
+  }, [user, participants, fetchedBuildings]);
+
+  // Reset function
+  const handleReset = () => {
+    setCurrentView("landing")
+    setEditingParticipant(null)
+    setEditingBuilding(null)
+    setNewParticipantName("")
+    setPendingVerificationEmail("")
+  }
+
+  // Direct navigation function that bypasses auth state logic
+  const navigateToLanding = () => {
+    console.log('Direct navigation to landing')
+    console.log('Current view before navigation:', currentView)
+    setIsManualNavigation(true)
+    setUserManuallyNavigatedToLanding(true)
+    setCurrentView("landing")
+    console.log('Navigation state set - manual navigation:', true, 'current view: landing')
+    // Reset the flag after navigation
+    setTimeout(() => {
+      setIsManualNavigation(false)
+      console.log('Manual navigation flag reset to false')
+    }, 2000)
+  }
+
+  // Authentication handlers
+  const handleSignUpSuccess = (userData: any) => {
+    setIsNewUser(true)
+    setCurrentView("dashboard")
+  }
+
+  const handleEmailVerificationNeeded = (email: string) => {
+    setPendingVerificationEmail(email)
+    setCurrentView("email-verification")
+  }
+
+  const handleEmailVerified = async () => {
+    console.log('Email verified - checking user data...')
+    
+    // Quick check for data - reduced timeout for faster response
+    let attempts = 0
+    const maxAttempts = 10 // Reduced from 30
+    
+    while (attempts < maxAttempts) {
+      console.log(`Data loading attempt ${attempts + 1}/${maxAttempts}`)
+      console.log('Current data state:', { 
+        participantsCount: participants.length, 
+        buildingsCount: fetchedBuildings.length,
+        participantsLoading,
+        buildingsLoading,
+        farmId
+      })
+      
+      // If data is still loading, wait a bit more
+      if (participantsLoading || buildingsLoading) {
+        console.log('Data still loading, waiting...')
+        await new Promise(resolve => setTimeout(resolve, 200)) // Reduced from 500ms
+        attempts++
+        continue
+      }
+      
+      // Check if we have a valid farmId
+      if (!farmId) {
+        console.log('No farmId yet, waiting...')
+        await new Promise(resolve => setTimeout(resolve, 200)) // Reduced from 500ms
+        attempts++
+        continue
+      }
+      
+      // Data has finished loading, check the results
+      const hasData = participants.length > 0 || fetchedBuildings.length > 0
+      console.log('Final data check results:', { 
+        participantsCount: participants.length, 
+        buildingsCount: fetchedBuildings.length,
+        farmId,
+        hasData 
+      })
+      
+      if (hasData) {
+        // Email verified and has data - go to dashboard
+        console.log('Email verified and has data - going to dashboard')
+        setIsNewUser(false)
+        setIsTrulyNewUser(false)
+        setCurrentView("dashboard")
+        return
+      } else {
+        // Email verified but no data - check if truly new user
+        isUserTrulyNew(user).then(trulyNew => {
+          console.log('Email verified but no data - checking if truly new user:', trulyNew)
+          setIsTrulyNewUser(trulyNew);
+          setIsNewUser(trulyNew); // Only show tour for truly new users
+          setCurrentView("dashboard")
+        });
+        return
+      }
+    }
+    
+    // If we reach here, data loading took too long, go to dashboard with tutorial
+    console.log('Data loading timeout - checking if truly new user')
+    isUserTrulyNew(user).then(trulyNew => {
+      setIsTrulyNewUser(trulyNew);
+      setIsNewUser(trulyNew); // Only show tour for truly new users
+      setCurrentView("dashboard")
+    });
+  }
+
+  const handleSignInSuccess = async (isEmailVerified: boolean) => {
+    console.log('Sign in successful, email verified:', isEmailVerified)
+    
+    // Set flag that user came from signin
+    setIsFromSignIn(true)
+    
+    if (isEmailVerified) {
+      // Email is verified - now check data with loading state
+      console.log('Email verified - checking user data...')
+      
+      // Quick check for data - reduced timeout for faster response
+      let attempts = 0
+      const maxAttempts = 10 // Reduced from 30
+      
+      while (attempts < maxAttempts) {
+        console.log(`Data loading attempt ${attempts + 1}/${maxAttempts}`)
+        console.log('Current data state:', { 
+          participantsCount: participants.length, 
+          buildingsCount: fetchedBuildings.length,
+          participantsLoading,
+          buildingsLoading,
+          farmId
+        })
+        
+        // If data is still loading, wait a bit more
+        if (participantsLoading || buildingsLoading) {
+          console.log('Data still loading, waiting...')
+          await new Promise(resolve => setTimeout(resolve, 200)) // Reduced from 500ms
+          attempts++
+          continue
+        }
+        
+        // Check if we have a valid farmId
+        if (!farmId) {
+          console.log('No farmId yet, waiting...')
+          await new Promise(resolve => setTimeout(resolve, 200)) // Reduced from 500ms
+          attempts++
+          continue
+        }
+        
+        // Data has finished loading, check the results
+        const hasData = participants.length > 0 || fetchedBuildings.length > 0
+        console.log('Final data check results:', { 
+          participantsCount: participants.length, 
+          buildingsCount: fetchedBuildings.length,
+          farmId,
+          hasData 
+        })
+        
+        if (hasData) {
+          // Verified and has data - go to dashboard
+          console.log('Email verified and has data - going to dashboard')
+          setIsNewUser(false)
+          setIsTrulyNewUser(false)
+          setCurrentView("dashboard")
+          return
+        } else {
+          // Verified but no data - check if truly new user
+          isUserTrulyNew(user).then(trulyNew => {
+            console.log('Email verified but no data - checking if truly new user:', trulyNew)
+            setIsTrulyNewUser(trulyNew);
+            setIsNewUser(trulyNew); // Only show tour for truly new users
+            setCurrentView("dashboard")
+          });
+          return
+        }
+      }
+      
+      // If we reach here, data loading took too long, go to dashboard with tutorial
+      console.log('Data loading timeout - checking if truly new user')
+      isUserTrulyNew(user).then(trulyNew => {
+        setIsTrulyNewUser(trulyNew);
+        setIsNewUser(trulyNew); // Only show tour for truly new users
+        setCurrentView("dashboard")
+      });
+    } else {
+      // Email is not verified - but allow access to dashboard
+      console.log('Email not verified - allowing access to dashboard')
+      setIsNewUser(true)
+      setCurrentView("dashboard")
+    }
+  }
+
+  const handleSignOut = async () => {
+    try {
+      setLoading(true);
+      setSignOutMessage("Signing out...");
+
+      // Clear all local state
+      setCurrentParticipant(null);
+      setCurrentView("landing");
+      setEditingParticipant(null);
+      setEditingBuilding(null);
+      setNewParticipantName("");
+      setPendingVerificationEmail("");
+      setViewingBuilding(null);
+      setIsFromSignIn(false);
+
+      // Sign out from Supabase (if admin)
+      try {
+        await supabase.auth.signOut();
+      } catch (e) {
+        // Ignore if already signed out or not admin
+      }
+
+      // Clear all session data
+      if (typeof window !== "undefined") {
+        sessionManager.clearSession();
+        sessionStorage.clear();
+        localStorage.clear();
+      }
+
+      setSignOutMessage("Signed out successfully!");
+
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } catch (error) {
+      console.error("Sign out error:", error);
+      setSignOutMessage("Sign out failed, reloading...");
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    }
+  };
+
+  // Participant handlers
+  const handleAddParticipant = async (participant: { name: string; access: string[]; code: string }) => {
+    console.log('🚀 handleAddParticipant called with:', participant)
+    console.log('Current state:', { user: user?.email, farmId, participantsLoading })
+    
+    if (!user) {
+      alert('Please sign in to add participants')
+      return
+    }
+
+    if (!farmId) {
+      console.error('❌ No farm ID available')
+      alert('Farm not available. Please refresh the page and try again.')
+      return
+    }
+
+    const result = await addParticipant({
+      name: participant.name,
+      access_tools: participant.access,
+      code: participant.code
+    })
+    
+    console.log('✅ addParticipant result:', result)
+    
+    if (result.success) {
+      setNewParticipantName(participant.name)
+      setCurrentView("congratulations")
+    } else {
+      console.error('❌ Failed to add participant:', result.error)
+      alert(`Error: ${result.error || 'Failed to add participant'}`)
+    }
+  }
+
+  const handleUpdateParticipant = async (participant: { name: string; access: string[]; code: string }) => {
+    if (!editingParticipant || !user) return
+    
+    const result = await updateParticipant(editingParticipant.id, {
+      name: participant.name,
+      access_tools: participant.access,
+      code: participant.code
+    })
+    
+    if (result.success) {
+      setEditingParticipant(null)
+      setCurrentView("dashboard")
+    } else {
+      alert(`Error: ${result.error || 'Failed to update participant'}`)
+    }
+  }
+
+  const handleEditParticipant = (id: number) => {
+    const participant = participants.find(p => String(p.id) === String(id)) // Ensure both are strings
+    if (participant) {
+      setEditingParticipant(participant)
+      setCurrentView("add-participant")
+    }
+  }
+
+  const handleDeleteParticipant = async (id: number) => {
+    const participant = participants.find(p => String(p.id) === String(id)) // Ensure both are strings
+    if (participant && confirm('Are you sure you want to delete this participant?')) {
+      const result = await deleteParticipant(participant.id)
+      if (!result.success) {
+        alert(`Error: ${result.error || 'Failed to delete participant'}`)
+      }
+    }
+  }
+
+  // Building handlers
+  const handleAddBuilding = async (building: { building_number: number; name: string; type: string; capacity: number; status: string; cycle_number?: number; cycle_start_date?: string }) => {
+    console.log('🚀 handleAddBuilding called with:', building)
+    console.log('Current state:', { user: user?.email, farmId, buildingsLoading })
+    
+    if (!user) {
+      alert('Please sign in to add buildings')
+      return
+    }
+
+    console.log("Adding building with farm_id:", farmId);
+    
+    // Validate farm ID before proceeding
+    if (!farmId || farmId.trim() === '') {
+      console.error('❌ No farm ID available for building creation');
+      alert('No farm available. Please refresh the page and try again.');
+      return;
+    }
+
+    // Verify farm exists in database
+    try {
+      const { data: farmExists, error: farmCheckError } = await supabase
+        .from('farms')
+        .select('id')
+        .eq('id', farmId)
+        .single()
+
+      if (farmCheckError || !farmExists) {
+        console.error('❌ Farm not found in database:', farmId);
+        alert('Farm not found. Please refresh the page and try again.');
+        return;
+      }
+      
+      console.log('✅ Farm validated before building creation:', farmId);
+    } catch (error) {
+      console.error('❌ Error validating farm:', error);
+      alert('Error validating farm. Please refresh the page and try again.');
+      return;
+    }
+
+    const result = await addBuilding(building.name, building.type, building.capacity, building.status, building.cycle_number, building.cycle_start_date, building.building_number)
+    
+    console.log('✅ addBuilding result:', result)
+    
+    if (result.success && result.data) {
+      // Open calculator for the new building
+      setViewingBuilding(result.data);
+      // Optionally: setCurrentView("dashboard"); // if you want to show dashboard behind modal
+    } else {
+      // Show specific error message from server
+      const errorMessage = result.error || 'Failed to add building';
+      console.error('❌ Failed to add building:', errorMessage)
+      alert(`Error: ${errorMessage}`);
+    }
+  }
+
+  const handleUpdateBuilding = async (building: { name: string; type: string; capacity: number; status: string; cycle_number?: number; cycle_start_date?: string }) => {
+    if (!editingBuilding || !user) return
+    
+    const result = await updateBuilding(editingBuilding.id, {
+      name: building.name,
+      status: building.status,
+      cycle_number: building.cycle_number,
+      cycle_start_date: building.cycle_start_date
+    })
+    
+    if (result.success) {
+      setEditingBuilding(null)
+      setCurrentView("dashboard")
+    } else {
+      alert(`Error: ${result.error || 'Failed to update building'}`)
+    }
+  }
+
+  const handleEditBuilding = (id: string) => {
+    const building = fetchedBuildings.find(b => b.id === id)
+    if (building) {
+      setEditingBuilding(building)
+      setCurrentView("add-building")
+    }
+  }
+
+  const handleDeleteBuilding = async (id: string) => {
+    if (confirm('Are you sure you want to delete this building?')) {
+      const result = await deleteBuilding(id)
+      if (!result.success) {
+        alert(`Error: ${result.error || 'Failed to delete building'}`)
+      }
+    }
+  }
+
+  const handleViewBuilding = (id: string) => {
+    console.log("View building clicked:", id);
+    const building = fetchedBuildings.find(b => b.id === id)
+    if (building) {
+      setViewingBuilding(building)
+    }
+  }
+
+  // Participant login handler
+  const handleParticipantLogin = async (code: string) => {
+    try {
+      const { data: participant, error } = await supabase
+        .from('participants')
+        .select('*')
+        .eq('code', code.trim())
+        .single()
+      
+      if (error) {
+        if (error.code === 'PGRST116') {
+          alert('Invalid access code. Please try again.')
+        } else {
+          alert('Database error. Please contact administrator.')
+        }
+        return
+      }
+      
+      if (participant) {
+        // Create session with proper typing
+        const session: Omit<ParticipantSession, 'expiresAt'> = {
+          id: participant.id,
+          name: participant.name,
+          code: participant.code,
+          access_tools: participant.access_tools,
+          // @ts-expect-error: farm_id is present in participant but not in ParticipantSession type
+          farm_id: participant.farm_id
+        }
+        
+        // Save session using session manager
+        if (sessionManager.saveSession(session)) {
+          setCurrentParticipant(sessionManager.getSession());
+          setCurrentView("participant-dashboard")
+        } else {
+          alert('Failed to create session. Please try again.')
+        }
+      } else {
+        alert('Invalid access code. Please try again.')
+      }
+      
+    } catch (error) {
+      console.error('Login error:', error)
+      alert('An error occurred. Please try again.')
+    }
+  }
+
+  // Format participants for display
+  const formattedParticipants = participants.map(p => ({
+    id: p.id, // Use the ID directly - it's already a number
+    name: p.name,
+    access: p.access_tools.join(", "),
+    code: p.code
+  }))
+
+  // Helper to fetch performance data for all buildings
+  const fetchBuildingsWithPerformance = useCallback(async () => {
+    if (!fetchedBuildings.length) {
+      setBuildingsWithPerformance([]);
+      return;
+    }
+    const results = await Promise.all(
+      fetchedBuildings.map(async (building) => {
+        // 1. Get latest calculator session for this building's farm
+        let session = null;
+        try {
+          const { data: sessionData } = await supabase
+            .from('calculator_sessions')
+            .select('*')
+            .eq('building_id', building.id)
+            .eq('is_active', true)
+            .single();
+          session = sessionData;
+        } catch {}
+
+        // 2. Get latest daily record for this building's farm
+        let latestRecord = null;
+        try {
+          const { data: dailyRecords } = await supabase
+            .from('daily_records')
+            .select('*')
+            .eq('building_id', building.id)
+            .order('date', { ascending: false })
+            .limit(1);
+          if (dailyRecords && dailyRecords.length > 0) {
+            latestRecord = dailyRecords[0];
+          }
+        } catch {}
+
+        // 3. Compute summary
+        let summary = null;
+        if (session && latestRecord) {
+          // Compute FCR (Feed Conversion Ratio)
+          const totalFeed = latestRecord.cumulative_feeds || 0;
+          const totalWeightGained = (latestRecord.ending_heads * ((latestRecord.alw || 0) - (session.farm_data?.initialGrams || 0))) / 1000;
+          const fcr = totalWeightGained > 0 ? (totalFeed / totalWeightGained) : 0;
+          summary = {
+            liveBirds: latestRecord.ending_heads,
+            mortality: latestRecord.mortality_percent,
+            fcr: fcr,
+            avgWeight: latestRecord.alw,
+          };
+        }
+        return { ...building, summary };
+      })
+    );
+    setBuildingsWithPerformance(results);
+    console.log('buildingsWithPerformance', results);
+  }, [fetchedBuildings]);
+
+  // Fetch performance data whenever buildings change
+  useEffect(() => {
+    fetchBuildingsWithPerformance();
+  }, [fetchBuildingsWithPerformance]);
+
+  // Calculate farm-wide performance
+  const buildingsWithData = buildingsWithPerformance.filter(b => b.performance);
+  const totalMortality = buildingsWithData.reduce((sum, b) => sum + b.performance.mortality, 0);
+  const avgFCR = buildingsWithData.length
+    ? (buildingsWithData.reduce((sum, b) => sum + b.performance.fcr, 0) / buildingsWithData.length)
+    : null;
+  const avgWeight = buildingsWithData.length
+    ? (buildingsWithData.reduce((sum, b) => sum + b.performance.avgWeight, 0) / buildingsWithData.length)
+    : null;
+
+  // Loading screen
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-blue-500 dark:border-blue-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600 dark:text-gray-300 text-lg">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Building View Modal/Page - Mobile Optimized
+  if (viewingBuilding) {
+    console.log("Rendering modal for building:", viewingBuilding);
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex flex-col">
+        {/* Mobile Header */}
+        <div className="bg-white dark:bg-gray-800 shadow-sm border-b dark:border-gray-700 sticky top-0 z-10">
+          <div className="flex items-center justify-between p-4">
+            <button
+              className="flex items-center text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+              onClick={() => setViewingBuilding(null)}
+            >
+              <svg className="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              Back
+            </button>
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
+              {viewingBuilding.name}
+            </h1>
+            <div className="w-16"></div> {/* Spacer for centering */}
+          </div>
+        </div>
+
+        {/* Calculator Content */}
+        <div className="flex-1 overflow-auto">
+          <div className="p-4">
+            <BroilerCalculator
+              initialBuildingNumber={viewingBuilding.cycle_number}
+              initialCycleNumber={viewingBuilding.cycle_number}
+              buildingId={viewingBuilding.id}
+              buildingName={viewingBuilding.name}
+              onSaveFarmSetup={async () => {
+                // Refetch buildings after save to update the dashboard
+                const { data, error } = await supabase.from("buildings").select("*");
+                if (!error && data) {
+                  setBuildings(data);
+                }
+                setViewingBuilding(null); // closes the calculator modal
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Congratulations Page - Mobile Optimized
+  if (currentView === "congratulations") {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
+        <Card className="w-full max-w-sm mx-auto">
+          <CardContent className="p-6 text-center">
+            <div className="mb-6">
+              <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-10 h-10 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h1 className="text-2xl font-bold text-green-600 dark:text-green-400 mb-2">Success!</h1>
+              <p className="text-gray-600 dark:text-gray-300 text-base">
+                {newParticipantName} has been added successfully.
+              </p>
+            </div>
+            
+            <div className="space-y-3">
+              <Button 
+                className="w-full bg-black text-white hover:bg-gray-800 h-12 text-base" 
+                onClick={() => setCurrentView("dashboard")}
+              >
+                Go to Dashboard
+              </Button>
+              <Button 
+                variant="outline" 
+                className="w-full h-12 text-base" 
+                onClick={() => setCurrentView("add-participant")}
+              >
+                Add Another
+              </Button>
+              <Button 
+                variant="outline" 
+                className="w-full text-gray-600 h-12 text-base" 
+                onClick={handleReset}
+              >
+                Back to Home
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  // Debug logging for black screen issue
+  console.log('Render state:', { 
+    isClient, 
+    currentView, 
+    authLoading, 
+    user: user?.email, 
+    viewingBuilding: !!viewingBuilding 
+  })
+
+  // Show loading state during SSR
+  if (!isClient) {
+    console.log('Showing client loading screen')
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 dark:border-blue-400 mx-auto mb-4"></div>
+          <p className="text-gray-600 dark:text-gray-300 text-lg">Initializing App...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Landing Page - Enhanced with Animations
+  if (currentView === "landing") {
+    return (
+      <AnimatedLandingPage
+        onSignUp={() => {
+          console.log('User clicked Sign Up - resetting manual navigation flag')
+          setUserManuallyNavigatedToLanding(false)
+          setCurrentView("signup")
+        }}
+        onSignIn={() => {
+          console.log('User clicked Sign In - resetting manual navigation flag')
+          setUserManuallyNavigatedToLanding(false)
+          setCurrentView("signin")
+        }}
+        onParticipantLogin={() => setCurrentView("participant-login")}
+        onGoToDashboard={() => setCurrentView("dashboard")}
+        onSignOut={handleSignOut}
+        user={user}
+        authError={authError || undefined}
+        isNewUser={isNewUser}
+      />
+    )
+  }
+
+
+
+  // Sign In Page
+  if (currentView === "signin") {
+    return (
+      <SignInForm
+        onBack={() => setCurrentView("landing")}
+        onSuccess={handleSignInSuccess}
+      />
+    )
+  }
+
+  // Email Verification Page
+  if (currentView === "email-verification") {
+    return (
+      <EmailVerification
+        email={pendingVerificationEmail || ""}
+        onBack={() => setCurrentView("signin")}
+        onVerified={handleEmailVerified}
+        isFromSignIn={true}
+      />
+    )
+  }
+
+  // Participant Login Page
+  if (currentView === "participant-login") {
+    console.log('Rendering participant login view')
+    return (
+      <ParticipantLogin
+        onLogin={handleParticipantLogin}
+        onBack={() => {
+          console.log('Back button clicked from participant login')
+          setCurrentView("landing")
+        }}
+      />
+    )
+  }
+
+  // Participant Dashboard
+  if (currentView === "participant-dashboard") {
+    console.log('Worker dashboard buildingsWithPerformance:', buildingsWithPerformance);
+    return (
+      <>
+        <SessionTimeoutWarning
+          onSessionExpired={() => {
+            sessionManager.clearSession()
+            setCurrentParticipant(null)
+            setCurrentView("landing")
+          }}
+        />
+        {/* <RoleDashboard
+          participant={currentParticipant}
+          onSignOut={() => {
+            sessionManager.clearSession()
+            setCurrentParticipant(null)
+            setCurrentView("landing")
+          }}
+        /> */}
+        <WorkerProductionDashboard 
+          participant={currentParticipant ?? undefined} 
+          onSignOut={handleSignOut}
+          buildings={buildingsWithPerformance}
+          farmPerformance={{
+            totalMortality,
+            avgFCR,
+            avgWeight,
+          }}
+          farmId={farmId}
+          onInputBuilding={(id: string) => {
+            const building = buildingsWithPerformance.find(b => b.id === id);
+            if (building) handleInputBuilding(building);
+          }}
+        />
+      </>
+    )
+  }
+
+
+
+  // Dashboard
+  if (currentView === "dashboard") {
+    // Check if user is authenticated
+    if (!user) {
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="p-8 text-center">
+              <h1 className="text-xl font-bold text-red-600 dark:text-red-400 mb-2">Access Denied</h1>
+              <p className="text-gray-600 dark:text-gray-300 mb-4">Please sign in to continue.</p>
+              <Button onClick={() => setCurrentView("landing")}>
+                Go to Home
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )
+    }
+    
+    const hasData = participants.length > 0 || fetchedBuildings.length > 0
+    
+<<<<<<< HEAD
+    // BLOCK ACCESS if email is not verified
+    if (!isEmailVerified) {
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="p-8 text-center">
+              <div className="mb-6">
+                <div className="w-20 h-20 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-10 h-10 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                <h1 className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 mb-2">Email Verification Required</h1>
+                <p className="text-gray-600 dark:text-gray-300 text-base mb-4">
+                  Please verify your email address to access the dashboard.
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                  We sent a verification link to: <strong>{user.email}</strong>
+                </p>
+              </div>
+=======
+    // TEMPORARILY DISABLED: Email verification blocking for immediate fix
+    // if (!isEmailVerified) {
+    //   return (
+    //     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+    //       <Card className="w-full max-w-md">
+    //         <CardContent className="p-8 text-center">
+    //           <div className="mb-6">
+    //             <div className="w-20 h-20 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+    //               <svg className="w-10 h-10 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    //                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+    //               </svg>
+    //             </div>
+    //             <h1 className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 mb-2">Email Verification Required</h1>
+    //             <p className="text-gray-600 dark:text-gray-300 text-base mb-4">
+    //               Please verify your email address to access the dashboard.
+    //             </p>
+    //             <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+    //               We sent a verification link to: <strong>{user.email}</strong>
+    //             </p>
+    //           </div>
+>>>>>>> 27a3d6eaffe80f16983255b933574f628fa0f5d8
+              
+    //           <div className="space-y-3">
+    //             <Button 
+    //               className="w-full bg-blue-600 text-white hover:bg-blue-700 h-12 text-base" 
+    //               onClick={() => setCurrentView("email-verification")}
+    //             >
+    //               Check Email Verification
+    //             </Button>
+    //             <Button 
+    //               variant="outline" 
+    //               className="w-full h-12 text-base" 
+    //               onClick={() => setCurrentView("landing")}
+    //             >
+    //               Back to Home
+    //             </Button>
+    //           </div>
+    //         </CardContent>
+    //       </Card>
+    //     </div>
+    //   )
+    // }
+    
+    return (
+      <>
+        <AnimatedDashboard
+          participants={formattedParticipants}
+          buildings={buildingsWithPerformance}
+          farmPerformance={{
+            totalMortality,
+            avgFCR,
+            avgWeight,
+          }}
+          onAddParticipant={() => {
+            console.log('🚀 onAddParticipant called - setting view to add-participant')
+            setCurrentView("add-participant")
+          }}
+          onEditParticipant={handleEditParticipant}
+          onDeleteParticipant={handleDeleteParticipant}
+          onAddBuilding={() => {
+            console.log('🚀 onAddBuilding called - setting view to add-building')
+            console.log('Current view before:', currentView)
+            setCurrentView("add-building")
+            console.log('Current view after setting:', "add-building")
+          }}
+          onEditBuilding={handleEditBuilding}
+          onDeleteBuilding={handleDeleteBuilding}
+          onViewBuilding={handleViewBuilding}
+          onSignOut={handleSignOut}
+          onBackToLanding={() => setCurrentView("landing")}
+          userEmail={user?.email}
+          farmId={farmId}
+          isNewUser={isNewUser}
+        />
+        
+<<<<<<< HEAD
+=======
+        {/* Email Verification Banner - Removed */}
+        
+        {/* Product Tour for first-time users */}
+        {console.log('ProductTour props:', { isNewUser, hasData, shouldShow: !hasData })}
+        <ProductTour 
+          isFirstTimeUser={!hasData} // Show tour for any user with no data
+          onComplete={() => {
+            console.log('Product tour completed')
+            setIsNewUser(false) // Reset after tour completion
+          }}
+        />
+        
+        {/* Force tour restart for testing */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="fixed top-4 left-4 z-[10001]">
+            <button 
+              onClick={() => {
+                localStorage.removeItem('hasSeenProductTour')
+                setIsNewUser(true)
+                console.log('Force tour restart')
+              }}
+              className="bg-blue-600 text-white px-3 py-2 text-sm rounded"
+            >
+              Force Tour Restart
+            </button>
+          </div>
+        )}
+        
+>>>>>>> 27a3d6eaffe80f16983255b933574f628fa0f5d8
+        {/* Debug info for tour triggering - Always show in production for debugging */}
+        <div className="fixed bottom-4 left-4 bg-black text-white p-2 text-xs rounded z-50">
+          isNewUser: {isNewUser.toString()}<br/>
+          isTrulyNewUser: {isTrulyNewUser.toString()}<br/>
+          hasData: {hasData.toString()}<br/>
+<<<<<<< HEAD
+          tourShouldShow: {isTrulyNewUser.toString()}<br/>
+=======
+          tourShouldShow: {(!hasData).toString()}<br/>
+>>>>>>> 27a3d6eaffe80f16983255b933574f628fa0f5d8
+          <button 
+            onClick={() => {
+              localStorage.removeItem('hasSeenProductTour')
+              console.log('Tour flag cleared')
+            }}
+            className="bg-red-600 text-white px-2 py-1 text-xs mt-1"
+          >
+            Clear Tour Flag
+          </button>
+          <button 
+            onClick={() => {
+              isUserTrulyNew(user).then(trulyNew => {
+                setIsTrulyNewUser(trulyNew);
+                setIsNewUser(trulyNew);
+                console.log('Force tour restart with truly new check:', trulyNew)
+              });
+            }}
+            className="bg-blue-600 text-white px-2 py-1 text-xs mt-1 ml-1"
+          >
+            Force Tour
+          </button>
+        </div>
+        
+<<<<<<< HEAD
+        {/* Product Tour for first-time users */}
+        <ProductTour 
+          isFirstTimeUser={isTrulyNewUser} // Only show tour for truly new users
+          onComplete={() => {
+            setIsNewUser(false) // Reset after tour completion
+            setIsTrulyNewUser(false) // Reset after tour completion
+          }}
+        />
+=======
+        {/* Debug Panel for Add Building/Participant Issues */}
+        <div className="fixed top-4 right-4 bg-black text-white p-3 text-xs rounded z-50 max-w-xs">
+          <div className="font-bold mb-2">Debug Panel</div>
+          <div>User: {user?.email || 'None'}</div>
+          <div>Farm ID: {farmId || 'None'}</div>
+          <div>Buildings: {fetchedBuildings.length}</div>
+          <div>Participants: {participants.length}</div>
+          <div className="mt-2 space-y-1">
+            <button 
+              onClick={() => {
+                console.log('=== DEBUG INFO ===')
+                console.log('User:', user)
+                console.log('Farm ID:', farmId)
+                console.log('Buildings:', fetchedBuildings)
+                console.log('Participants:', participants)
+                console.log('Current View:', currentView)
+              }}
+              className="bg-blue-600 text-white px-2 py-1 text-xs w-full"
+            >
+              Log Debug Info
+            </button>
+            <button 
+              onClick={() => setCurrentView("add-building")}
+              className="bg-green-600 text-white px-2 py-1 text-xs w-full"
+            >
+              Test Add Building
+            </button>
+            <button 
+              onClick={() => setCurrentView("add-participant")}
+              className="bg-purple-600 text-white px-2 py-1 text-xs w-full"
+            >
+              Test Add Participant
+            </button>
+          </div>
+        </div>
+>>>>>>> 27a3d6eaffe80f16983255b933574f628fa0f5d8
+        
+        {/* Verification Banner removed - now blocking access completely */}
+      </>
+    )
+  }
+
+  // Add Participant Page
+  if (currentView === "add-participant") {
+    // Check if user is authenticated
+    if (!user) {
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="p-8 text-center">
+              <h1 className="text-xl font-bold text-red-600 dark:text-red-400 mb-2">Access Denied</h1>
+              <p className="text-gray-600 dark:text-gray-300 mb-4">Please sign in to continue.</p>
+              <Button onClick={() => setCurrentView("landing")}>
+                Go to Home
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )
+    }
+    
+<<<<<<< HEAD
+    // Check if email is verified
+    const isEmailVerified = !!user?.email_confirmed_at
+    if (!isEmailVerified) {
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="p-8 text-center">
+              <div className="mb-6">
+                <div className="w-20 h-20 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-10 h-10 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                <h1 className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 mb-2">Email Verification Required</h1>
+                <p className="text-gray-600 dark:text-gray-300 text-base mb-4">
+                  Please verify your email address to add participants.
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                  We sent a verification link to: <strong>{user.email}</strong>
+                </p>
+              </div>
+=======
+    // TEMPORARY: Allow access for testing if user exists
+    // const isEmailVerified = !!user?.email_confirmed_at
+    // console.log('Add Participant - Email verification check:', { 
+    //   userEmail: user?.email, 
+    //   emailConfirmedAt: user?.email_confirmed_at, 
+    //   isEmailVerified 
+    // })
+    
+    // if (!isEmailVerified && user?.email) {
+    //   console.log('Email not verified, but allowing access for testing')
+    //   // Continue to the form instead of blocking
+    // } else if (!isEmailVerified) {
+    //   return (
+    //     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+    //       <Card className="w-full max-w-md">
+    //         <CardContent className="p-8 text-center">
+    //           <div className="mb-6">
+    //             <div className="w-20 h-20 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+    //               <svg className="w-10 h-10 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    //                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+    //               </svg>
+    //             </div>
+    //             <h1 className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 mb-2">Email Verification Required</h1>
+    //             <p className="text-gray-600 dark:text-gray-300 text-base mb-4">
+    //               Please verify your email address to add participants.
+    //             </p>
+    //             <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+    //               We sent a verification link to: <strong>{user.email}</strong>
+    //             </p>
+    //           </div>
+>>>>>>> 27a3d6eaffe80f16983255b933574f628fa0f5d8
+              
+    //           <div className="space-y-3">
+    //             <Button 
+    //               className="w-full bg-blue-600 text-white hover:bg-blue-700 h-12 text-base" 
+    //               onClick={() => setCurrentView("email-verification")}
+    //             >
+    //               Check Email Verification
+    //             </Button>
+    //             <Button 
+    //               variant="outline" 
+    //               className="w-full h-12 text-base" 
+    //               onClick={() => setCurrentView("dashboard")}
+    //             >
+    //               Back to Dashboard
+    //             </Button>
+    //           </div>
+    //         </CardContent>
+    //       </Card>
+    //     </div>
+    //   )
+    // }
+    return (
+      <AddParticipantView
+        onBack={() => {
+          setEditingParticipant(null)
+          setCurrentView("dashboard")
+        }}
+        onAddParticipant={editingParticipant ? handleUpdateParticipant : handleAddParticipant}
+        isNewAccount={isNewAccount}
+        editingParticipant={editingParticipant ? {
+          id: editingParticipant.id, // Use the ID directly
+          name: editingParticipant.name,
+          access_tools: editingParticipant.access_tools,
+          code: editingParticipant.code
+        } : null}
+      />
+    )
+  }
+
+  // Simple Registration Flow
+  if (currentView === "signup") {
+    return (
+      <SimpleRegistration
+        onSuccess={() => {
+          console.log('Registration completed - checking if truly new user')
+          isUserTrulyNew(user).then(trulyNew => {
+            setIsTrulyNewUser(trulyNew);
+            setIsNewUser(trulyNew); // Only show tour for truly new users
+            setCurrentView("dashboard")
+          });
+        }}
+        onBack={navigateToLanding}
+      />
+    )
+  }
+
+  // Add Building Page
+  if (currentView === "add-building") {
+    // Check if user is authenticated
+    if (!user) {
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="p-8 text-center">
+              <h1 className="text-xl font-bold text-red-600 dark:text-red-400 mb-2">Access Denied</h1>
+              <p className="text-gray-600 dark:text-gray-300 mb-4">Please sign in to continue.</p>
+              <Button onClick={() => setCurrentView("landing")}>
+                Go to Home
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )
+    }
+    
+<<<<<<< HEAD
+    // Check if email is verified
+    const isEmailVerified = !!user?.email_confirmed_at
+    if (!isEmailVerified) {
+      return (
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardContent className="p-8 text-center">
+              <div className="mb-6">
+                <div className="w-20 h-20 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <svg className="w-10 h-10 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                </div>
+                <h1 className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 mb-2">Email Verification Required</h1>
+                <p className="text-gray-600 dark:text-gray-300 text-base mb-4">
+                  Please verify your email address to add buildings.
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+                  We sent a verification link to: <strong>{user.email}</strong>
+                </p>
+              </div>
+=======
+    // TEMPORARILY DISABLED: Email verification check for testing
+    // const isEmailVerified = !!user?.email_confirmed_at
+    // console.log('Add Building - Email verification check:', { 
+    //   userEmail: user?.email, 
+    //   emailConfirmedAt: user?.email_confirmed_at, 
+    //   isEmailVerified 
+    // })
+    
+    // TEMPORARY: Allow access for testing if user exists
+    // if (!isEmailVerified && user?.email) {
+    //   console.log('Email not verified, but allowing access for testing')
+    //   // Continue to the form instead of blocking
+    // } else if (!isEmailVerified) {
+    //   return (
+    //     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center p-4">
+    //       <Card className="w-full max-w-md">
+    //         <CardContent className="p-8 text-center">
+    //           <div className="mb-6">
+    //             <div className="w-20 h-20 bg-yellow-100 dark:bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+    //               <svg className="w-10 h-10 text-yellow-600 dark:text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    //                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+    //               </svg>
+    //             </div>
+    //             <h1 className="text-2xl font-bold text-yellow-600 dark:text-yellow-400 mb-2">Email Verification Required</h1>
+    //             <p className="text-gray-600 dark:text-gray-300 text-base mb-4">
+    //               Please verify your email address to add buildings.
+    //             </p>
+    //             <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+    //               We sent a verification link to: <strong>{user.email}</strong>
+    //             </p>
+    //           </div>
+>>>>>>> 27a3d6eaffe80f16983255b933574f628fa0f5d8
+              
+    //           <div className="space-y-3">
+    //             <Button 
+    //               className="w-full bg-blue-600 text-white hover:bg-blue-700 h-12 text-base" 
+    //               onClick={() => setCurrentView("email-verification")}
+    //             >
+    //               Check Email Verification
+    //             </Button>
+    //             <Button 
+    //               variant="outline" 
+    //               className="w-full h-12 text-base" 
+    //               onClick={() => setCurrentView("dashboard")}
+    //             >
+    //               Back to Dashboard
+    //             </Button>
+    //           </div>
+    //         </CardContent>
+    //       </Card>
+    //     </div>
+    //   )
+    // }
+    
+    // Debug info
+    console.log('Add Building View - Debug Info:', {
+      user: user?.email,
+      farmId,
+      fetchedBuildings: fetchedBuildings.length,
+      editingBuilding
+    })
+    
+    // Get used building numbers
+    const usedBuildingNumbers = fetchedBuildings
+      .map(b => b.building_number)
+      .filter((num): num is number => num !== undefined);
+    
+    console.log('fetchedBuildings:', fetchedBuildings)
+    console.log('usedBuildingNumbers extracted:', usedBuildingNumbers)
+    
+    return (
+      <AddBuildingView
+        onBack={() => {
+          setEditingBuilding(null)
+          setCurrentView("dashboard")
+        }}
+        onAddBuilding={handleAddBuilding}
+        editingBuilding={editingBuilding}
+        usedBuildingNumbers={usedBuildingNumbers} // <-- pass as prop
+      />
+    )
+  }
+
+  return null
+}
+
+function useBuildingCalculatorData(buildingId: string | undefined) {
+  const [farmData, setFarmData] = useState<any>(null);
+  const [dailyRecords, setDailyRecords] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!buildingId) return;
+    setLoading(true);
+    supabase
+      .from("building_calculator_data")
+      .select("*")
+      .eq("building_id", buildingId)
+      .single()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Error fetching data:', error);
+        } else if (data) {
+          setFarmData(data.farm_data);
+          setDailyRecords(data.daily_records);
+        } else {
+          setFarmData(null);
+          setDailyRecords([]);
+        }
+        setLoading(false);
+      });
+  }, [buildingId]);
+
+  // Save function
+  const saveCalculatorData = async (newFarmData: any, newDailyRecords: any[]) => {
+    if (!buildingId) return;
+    const { data, error } = await supabase
+      .from("building_calculator_data")
+      .upsert({
+        building_id: buildingId,
+        farm_data: newFarmData,
+        daily_records: newDailyRecords,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'building_id' });
+    if (error) throw error;
+  };
+
+  return { farmData, setFarmData, dailyRecords, setDailyRecords, saveCalculatorData, loading };
+}
